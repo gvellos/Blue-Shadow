@@ -44,7 +44,9 @@ What the real-data path does:
 - Mask-aware, block-wise CFAR on B08 (the full tile never sits in memory).
 - AIS cleaning (9-digit MMSI, duplicates, >60 kn jump outliers, SOG/COG sentinels), projection through the tile's UTM grid,
   interpolation to the granule sensing time from `MTD_TL.xml`.
-- Static-structure catalogue from AIS AtoN + optional csv + OpenStreetMap (`--osm`: turbines, platforms, buoys, lights).
+- Static-structure catalogue from AIS AtoN + optional csv + OpenStreetMap (`--osm`: turbines, platforms, buoys, lights;
+  cached in `structures_osm.csv` for one area at a time: delete it when you change area. If Overpass is down it retries,
+  tries a mirror, then carries on without it).
 - Detection-limit curve from synthetic boats pasted into *real* clear-water patches of the scene (sub-pixel coverage model,
   hull contrast taken from matched 20-100 m vessels). Reported as measured-but-simulated.
 - Extra outputs: `contacts.geojson` (detections + interpolated AIS), NIR and RGB crops, nearest AIS tracks per contact.
@@ -87,6 +89,11 @@ What changes for radar (`sar.py` loads the scene, `pipeline_sar.py` runs it):
 - **CFAR in metres.** The guard and background windows are fixed at 410 m and 910 m, so a 2.5 m ICEYE grid gets
   windows ~4× wider in pixels than a 10 m Sentinel-1 grid. The detector is **two-pass**: bright targets are left out of
   the second background estimate, so a ship next to another ship (a convoy, an anchorage, a wind farm) isn't hidden.
+- **Length from the core, streaks flagged.** A bright ship smears into a cross along the image lines (side-lobes).
+  Length is measured on the blob pixels within 13 dB of the ship's peak, minus the resolution blur. Unmatched
+  detections on a brighter ship's azimuth or range line, at least 10 dB fainter, are labelled `SIDELOBE_ARTIFACT`
+  (status `artifact`: kept for audit, never queued). AIS-matched detections are never flagged. On the real Øresund night
+  pass this cut the length error against AIS from 79 m to 27 m, and 22 of 193 detections were flagged as streaks.
 - **Automatic threshold.** The seed threshold comes from the speckle measured on open water (gamma ENL fitted to the
   99.9th percentile) and a false-alarm target (`--fa-rate`, per 100 km²: 1 for Sentinel-1, 0.1 for ICEYE). Use `--kseed`
   to set it by hand.
@@ -102,8 +109,9 @@ python eval.py --build --sar s1      # fake night Sentinel-1 pass
 python eval.py --build --sar iceye   # fake ICEYE GRD (2.5 m, amplitude DN, GCP georeferencing)
 ```
 
-Limitations of the SAR path: azimuth ambiguities ("ghosts") of very bright ships and wind-farm side-lobes can still
-trigger false alarms. The Doppler shift uses a flat-earth geometry with the nominal heading (about 10 % accuracy). The
+Limitations of the SAR path: azimuth ambiguities ("ghosts", displaced a few km along the flight direction) of very bright
+ships aren't handled yet, and fixed objects missing from OpenStreetMap (piles, channel markers) show up as dark
+candidates; add them with `--structures my.csv`. The Doppler shift uses a flat-earth geometry with the nominal heading (about 10 % accuracy). The
 ICEYE loader follows ICEYE's documented metadata keys but has only been tested on the fixture, not on a real delivery,
 so check the printed scene summary. ICEYE data isn't free; ESA's third-party missions programme gives researchers
 access on proposal.

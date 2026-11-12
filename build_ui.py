@@ -56,7 +56,7 @@ kbd{font:12px ui-monospace,monospace}
 <script>/*__LEAFLET_JS__*/</script>
 <script>
 const D=__DATA__;
-const COL={AIS_MATCH:"#2ca02c",matched:"#2ca02c",DARK_CANDIDATE:"#d62728",AIS_MISMATCH:"#ff7f0e",POSSIBLE_AIS_GAP:"#ff7f0e",NO_AIS_COVERAGE:"#ff7f0e",NEAR_COAST_CLUTTER:"#888",SMALL_BELOW_LIMIT:"#888",STATIC_STRUCTURE:"#555"};
+const COL={AIS_MATCH:"#2ca02c",matched:"#2ca02c",DARK_CANDIDATE:"#d62728",AIS_MISMATCH:"#ff7f0e",POSSIBLE_AIS_GAP:"#ff7f0e",NO_AIS_COVERAGE:"#ff7f0e",NEAR_COAST_CLUTTER:"#888",SMALL_BELOW_LIMIT:"#888",STATIC_STRUCTURE:"#555",SIDELOBE_ARTIFACT:"#bbb"};
 const LAT0=55.45,LON0=14.10;
 const MS=D.report.map_size||[1500,1500],R=MS[0]/120;
 const px=r=>r.map_xy?[r.map_xy[0]/10,r.map_xy[1]/10]:[(r.lon-LON0)*Math.cos(LAT0*Math.PI/180)*111320/10,(LAT0-r.lat)*111320/10];

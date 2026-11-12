@@ -41,6 +41,13 @@ DEFAULT_ECHO_K = 3.0       # ship echo = k * sea backscatter * L^2 (m^2); the si
 # once warped to UTM, has a heavier extreme tail than the fitted gamma predicts (~10x more spikes on the fixture);
 # Sentinel-1 keeps 1 because a stricter threshold starts losing weak real echoes. Both measured with eval.py --sar.
 DEFAULT_FA_RATE = {"sentinel-1": 1.0, "iceye": 0.1}
+# Ship extent = pixels within CORE_DB of the ship's peak. A bright ship's point-spread side-lobes (the "cross" along the
+# image lines) sit >= ~13 dB below its peak (sinc; ~20 dB with the usual weighting), so they fall outside the core.
+CORE_DB = 13.0
+# A detection is a side-lobe artifact of a brighter ship when it lies on one of that ship's image-line arms, within
+# SIDELOBE_CELLS resolution cells, and is at least SIDELOBE_DB fainter.
+SIDELOBE_CELLS, SIDELOBE_DB = 40, 10.0
+RESOLUTION_M = 20.0        # set per scene by configure()
 
 
 def odd(n):
@@ -50,6 +57,8 @@ def odd(n):
 
 def configure(scene, kseed, klow):
     """Point the shared detector / explainer at this scene's pixel size and resolution."""
+    global RESOLUTION_M
+    RESOLUTION_M = scene.resolution_m
     R.PX = scene.px
     P.GUARD, P.BG = odd(GUARD_M / scene.px), odd(BG_M / scene.px)
     P.K_SEED, P.K_LOW = kseed, klow
@@ -132,7 +141,64 @@ def detect(img, excl):
     bright = ndi.binary_dilation(z > P.K_SEED, iterations=3)
     if bright.any():
         z, mu = R.cfar(img, ~excl, bg_valid=~excl & ~bright)
-    return R.blobs(img, z, mu, excl)
+    dets = R.blobs(img, z, mu, excl)
+    for d in dets:
+        measure_core(d, img, mu, z, excl)
+    return dets
+
+
+def measure_core(d, img, mu, z, excl):
+    """Re-measure a detection's length on its core: the pixels of its detection blob (z > K_LOW) connected to the peak
+    whose excess over the sea is within CORE_DB of the peak excess. The blob alone also swallows the side-lobe streaks
+    of bright ships, which is why raw lengths came out 2-3x too long on real Sentinel-1; for a weak ship the blob is
+    the tighter limit. The resolution blur is then removed (L^2 - res^2), since a point target already spreads over
+    about one resolution cell."""
+    px, r, c = R.PX, d["row"], d["col"]
+    rad = int(min(d["L_est"] / px + 4, 600))
+    r0, c0 = max(r - rad, 0), max(c - rad, 0)
+    exc = img[r0:r + rad + 1, c0:c + rad + 1] - mu[r0:r + rad + 1, c0:c + rad + 1]
+    peak = exc[r - r0, c - c0]
+    if peak <= 0:
+        return
+    sl = (slice(r0, r + rad + 1), slice(c0, c + rad + 1))
+    lab, _ = ndi.label((exc >= peak * 10 ** (-CORE_DB / 10)) & (z[sl] > P.K_LOW) & ~excl[sl], structure=np.ones((3, 3)))
+    rr, cc = np.nonzero(lab == lab[r - r0, c - c0])
+    lam = np.linalg.eigvalsh(np.cov(np.vstack([rr, cc]))).max() if len(rr) > 1 else 0.0
+    raw = math.sqrt(12 * lam + 1) * px
+    d["L_raw"], d["L_est"] = d["L_est"], float(math.sqrt(max(raw ** 2 - RESOLUTION_M ** 2, px ** 2)))
+    d["excess_sum"], d["core_px"] = float(exc[rr, cc].sum()), int(len(rr))
+
+
+def flag_sidelobes(dets, scene, protect=frozenset()):
+    """Indices of detections that are side-lobe streaks of a brighter ship rather than targets of their own.
+
+    A bright point target smears along the image's two axes: the flight (azimuth) direction and the range direction.
+    A detection is flagged when a brighter detection exists such that (1) it lies within SIDELOBE_CELLS resolution
+    cells, (2) its offset is (nearly) along the bright ship's azimuth or range axis, within half the bright ship's
+    length plus two cells, and (3) it is at least SIDELOBE_DB fainter. Needs the flight direction."""
+    if not scene.has_geometry or len(dets) < 2:
+        return {}
+    az, rg = scene.flight_unit(), scene.range_unit()
+    reach, cell = SIDELOBE_CELLS * scene.resolution_m, scene.resolution_m
+    order = sorted(range(len(dets)), key=lambda i: -dets[i]["snr_db"])
+    out = {}
+    for k, i in enumerate(order):
+        b = dets[i]
+        if i in out:
+            continue
+        for j in order[k + 1:]:
+            f = dets[j]
+            if j in out or j in protect or f["snr_db"] > b["snr_db"] - SIDELOBE_DB:
+                continue
+            dxy = np.array([f["x"] - b["x"], f["y"] - b["y"]])
+            dist = float(np.hypot(*dxy))
+            if dist > reach:
+                continue
+            tol = 0.5 * b["L_est"] + 2 * cell
+            if min(abs(float(dxy @ az)), abs(float(dxy @ rg))) <= tol:
+                out[j] = dict(parent=i, dist_m=round(dist), db_below=round(b["snr_db"] - f["snr_db"], 1),
+                              axis="azimuth" if abs(float(dxy @ rg)) <= tol else "range")
+    return out
 
 
 def detect_tiled(scene, excl):
@@ -341,7 +407,14 @@ def main():
 
     # ---- detection + matching
     print("Detecting (tiled, mask-aware CFAR)...")
-    dets = detect_tiled(scene, excl)
+    dets_all = detect_tiled(scene, excl)
+    # A detection confirmed by a fresh AIS vessel is a real ship, even on a brighter ship's streak (a guard boat next to
+    # a dredger): match first, then only unmatched detections can be side-lobe artifacts.
+    art = flag_sidelobes(dets_all, scene, protect=set(P.match(dets_all, ais_scene)))
+    keep = [i for i in range(len(dets_all)) if i not in art]
+    dets = [dets_all[i] for i in keep]                           # artifacts take no further part
+    make_id = lambda i_all: f"BS-{t_img:%Y%m%d}-{i_all + 1:04d}"
+    print(f"Side-lobe artifacts: {len(art)} of {len(dets_all)} detections lie on a brighter ship's image-line streak")
     pairs = P.match(dets, ais_scene)
     matched_mmsi = {v["mmsi"] for v, _ in pairs.values()}
 
@@ -379,7 +452,7 @@ def main():
     for i, d in enumerate(dets):
         dl = dist_land(d["x"], d["y"])
         conf, brk = P.confidence(d, dl)
-        rec = dict(id=f"BS-{t_img:%Y%m%d}-{i + 1:04d}", time_utc=t_img.isoformat() + "+00:00", sensor=scene.sensor,
+        rec = dict(id=make_id(keep[i]), time_utc=t_img.isoformat() + "+00:00", sensor=scene.sensor,
                    confidence=conf, confidence_breakdown=brk, est_length_m=round(d["L_est"]),
                    est_length_uncertainty_m=round(scene.resolution_m / 2 + 0.3 * d["L_est"]),
                    snr_db=round(d["snr_db"], 1), peak_z=round(d["peak_z"], 1), area_px=d["area_px"],
@@ -410,6 +483,15 @@ def main():
                                         age_s=round(v["age_s"]), fresh=v["fresh"], doppler_shift_m=v["az_shift_m"],
                                         length_m=v["length"] if v["mmsi"] in known_len else None) for v in near])
         recs.append(rec)
+    for j, info in sorted(art.items()):                          # kept for audit, never queued
+        d, parent = dets_all[j], make_id(info["parent"])
+        recs.append(dict(id=make_id(j), time_utc=t_img.isoformat() + "+00:00", sensor=scene.sensor, confidence=0.0,
+                         est_length_m=round(d["L_est"]), snr_db=round(d["snr_db"], 1), peak_z=round(d["peak_z"], 1),
+                         area_px=d["area_px"], map_xy=[round(d["x"], 1), round(d["y"], 1)], status="artifact",
+                         reason_code="SIDELOBE_ARTIFACT",
+                         reason_text=f"Side-lobe streak of {parent}: on its {info['axis']} line {info['dist_m']} m away, "
+                                     f"{info['db_below']} dB fainter.",
+                         evidence=dict(parent=parent, **{k: info[k] for k in ("axis", "dist_m", "db_below")})))
     lon, lat = lonlat([r["map_xy"][0] for r in recs], [r["map_xy"][1] for r in recs])
     for r, lo, la in zip(recs, lon, lat):
         r["lat"], r["lon"] = round(la, 5), round(lo, 5)
@@ -483,6 +565,7 @@ def main():
                   scene_stats=scene_stats, ais_stats=ais_stats, ais_in_visible_scene=len(ais_scene), ais_under_mask=len(ais_masked),
                   structures_in_scene=len(static), detections=len(dets), matched=len(pairs), unidentified=len(queue),
                   static_structures=sum(r["status"] == "static_structure" for r in recs), reason_breakdown=reasons,
+                  sidelobe_artifacts=len(art),
                   size_bands=rows, detection_limit_curve=curve, below_limit_m=round(P.BELOW_LIMIT_M),
                   injection=dict(echo_k=round(echo_k, 2), hull_contrast_source=echo_src, tiles=tiles if not a.no_inject else []),
                   geometry=dict(pixel_m=round(px, 2), resolution_m=round(scene.resolution_m, 1), heading_deg=scene.heading_deg,

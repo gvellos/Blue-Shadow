@@ -16,7 +16,7 @@ Reuses interpolate / match / explain / confidence / BANDS from pipeline.py and s
   * injection  : synthetic boats pasted into REAL clear-water patches of this scene with a sub-pixel coverage model,
                  giving a measured detection-probability-vs-length curve for this sea state and sun geometry.
 Coordinates: local metres, x east / y south from the tile's top-left corner (same frame as pipeline.py)."""
-import argparse, glob, json, math, os, re, urllib.parse, urllib.request
+import argparse, glob, json, math, os, re, time, urllib.error, urllib.parse, urllib.request
 import numpy as np, pandas as pd, rasterio
 from rasterio.enums import Resampling
 from rasterio.warp import transform as rtransform
@@ -201,6 +201,9 @@ def load_structures(path, left, top, crs):
     return [((float(x - left), float(top - y)), nm) for x, y, nm in zip(e, n, names)]
 
 
+OVERPASS_SERVERS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]
+
+
 def fetch_osm_structures(lonlat_bounds, cache="structures_osm.csv"):
     """Offshore wind turbines, platforms, buoys, beacons and lights from OpenStreetMap (Overpass API), cached to csv."""
     if os.path.exists(cache):
@@ -213,9 +216,20 @@ def fetch_osm_structures(lonlat_bounds, cache="structures_osm.csv"):
       node["man_made"="lighthouse"]({bbox}); way["man_made"="offshore_platform"]({bbox});
     );out center;"""
     print("Fetching structures from OpenStreetMap...")
-    req = urllib.request.Request("https://overpass-api.de/api/interpreter?data=" + urllib.parse.quote(q),
-                                 headers={"User-Agent": "BlueShadow/0.1 (research prototype)"})   # default urllib UA gets HTTP 406
-    data = json.load(urllib.request.urlopen(req, timeout=180))
+    data = None
+    for attempt, server in enumerate(OVERPASS_SERVERS * 2):           # each server twice; Overpass is often overloaded
+        try:
+            req = urllib.request.Request(f"{server}?data=" + urllib.parse.quote(q),
+                                         headers={"User-Agent": "BlueShadow/0.1 (research prototype)"})  # default UA gets 406
+            data = json.load(urllib.request.urlopen(req, timeout=180))
+            break
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+            print(f"  {server}: {e}; {'retrying' if attempt < 2 * len(OVERPASS_SERVERS) - 1 else 'giving up'}")
+            time.sleep(5 * (attempt + 1))
+    if data is None:
+        print("WARNING: OpenStreetMap unavailable; continuing without its structures (turbines may show as dark "
+              "candidates). Re-run with --osm later, or pass --structures my.csv.")
+        return None
     rows = []
     for e in data["elements"]:
         lat, lon = (e["lat"], e["lon"]) if "lat" in e else (e["center"]["lat"], e["center"]["lon"])

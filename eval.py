@@ -48,7 +48,8 @@ def _load_truth(path):
 def score_detection(run_dir, truth_csv):
     truth = _load_truth(truth_csv)
     dets = json.load(open(f"{run_dir}/all_detections.json"))
-    vessels = [d for d in dets if d.get("status") != "static_structure"]   # turbines are scored elsewhere
+    # turbines are scored elsewhere; SAR side-lobe artifacts are flagged, never queued, so they aren't vessel claims
+    vessels = [d for d in dets if d.get("status") not in ("static_structure", "artifact")]
 
     # greedy nearest-neighbour matching of each truth point to one detection
     used, matches = set(), {}
