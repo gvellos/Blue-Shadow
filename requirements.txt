@@ -3,3 +3,7 @@ scipy
 matplotlib
 pandas
 rasterio
+# fetch_scene.py (Sentinel-2 / Sentinel-1 / WorldCover land mask from Microsoft Planetary Computer)
+pystac-client
+planetary-computer
+shapely

@@ -53,6 +53,61 @@ Smoke test without real data: `python make_fake_scene.py && OUT=./out_fake pytho
 
 Data files are git-ignored. Check the DMA and Copernicus terms of use before redistributing anything.
 
+## Night and cloud: SAR (Sentinel-1 + ICEYE)
+Sentinel-2 is optical, so it sees nothing at night (and it only passes at ~10:30 local time anyway). Radar sends its own
+pulse, so it sees in darkness and through cloud. `pipeline_sar.py` runs the same detect → match → explain → report chain
+on SAR and writes the same outputs, so `build_ui.py`, `link_contacts.py` and `eval.py` work unchanged. Two sensors are
+supported, and they're meant to be used together ("tip and cue"):
+
+- **Sentinel-1**: free, systematic. It passes Denmark around 05:30 and 17:30 local time, both dark from about October to
+  March. ~20 m resolution, so it finds ships over roughly 20 m. Use it to search the whole area.
+- **ICEYE**: commercial, tasked (you order a place and time). 0.5–3 m resolution, so it also sees small boats. Use it to
+  confirm a Sentinel-1 `DARK_CANDIDATE` at its predicted position. Cross-pass linking then ties the two sightings together.
+
+```
+# Sentinel-1: pick a night pass and pull the bbox window (VV/VH + ESA WorldCover land mask) from Planetary Computer
+python fetch_scene.py --sensor s1 --bbox 12.55 55.55 12.85 55.75 --date 2025-11-20 --days 6 --night
+OUT=./out_s1 python pipeline_sar.py --scene s1_extracted/<id>.S1 --ais ais_window.csv --osm
+OUT=./out_s1 python build_ui.py
+
+# ICEYE: point it at the GRD GeoTIFF (its .json/.xml metadata sidecar next to it); build a land mask once
+python fetch_scene.py --landmask-for path/to/ICEYE_..._GRD.tif
+OUT=./out_iceye python pipeline_sar.py --scene path/to/ICEYE_..._GRD.tif --ais ais_window.csv --osm
+```
+
+What changes for radar (`sar.py` loads the scene, `pipeline_sar.py` runs it):
+- **One scene interface.** `sar.open_scene()` returns linear backscatter on a north-up UTM grid with square pixels,
+  warping on the fly when a product is in lon/lat or radar geometry (GCPs, fitted affine; it warns if the fit is poor).
+  ICEYE intensity = `calibration_factor × DN²`. Missing or wrong metadata can be overridden with `--time`, `--heading`,
+  `--incidence`, `--calib`, `--landmask`.
+- **Doppler shift.** A ship moving towards or away from the radar is imaged in the wrong place along the flight direction:
+  about 110 s × its slant-range speed for Sentinel-1, which is often 300–500 m. Each AIS position is moved by the
+  predicted shift before matching. On the fake Sentinel-1 scene this is what turns 2 matches into 6;
+  `--no-az-shift` lets you compare.
+- **CFAR in metres.** The guard and background windows are fixed at 410 m and 910 m, so a 2.5 m ICEYE grid gets
+  windows ~4× wider in pixels than a 10 m Sentinel-1 grid. The detector is **two-pass**: bright targets are left out of
+  the second background estimate, so a ship next to another ship (a convoy, an anchorage, a wind farm) isn't hidden.
+- **Automatic threshold.** The seed threshold comes from the speckle measured on open water (gamma ENL fitted to the
+  99.9th percentile) and a false-alarm target (`--fa-rate`, per 100 km²: 1 for Sentinel-1, 0.1 for ICEYE). Use `--kseed`
+  to set it by hand.
+- **Land mask.** Comes from ESA WorldCover; there's no cloud mask, because radar sees through cloud. The small-boat limit
+  is about one resolution cell: 20 m for Sentinel-1, ~4 m for ICEYE. The size bands get finer when the sensor can
+  resolve small boats.
+- **Detection limit.** The curve comes from synthetic ship echoes pasted into real clear-water patches of the scene. The
+  echo strength is calibrated from matched AIS vessels.
+
+Test without real data (the fixtures paint moving ships at their Doppler-shifted positions):
+```
+python eval.py --build --sar s1      # fake night Sentinel-1 pass
+python eval.py --build --sar iceye   # fake ICEYE GRD (2.5 m, amplitude DN, GCP georeferencing)
+```
+
+Limitations of the SAR path: azimuth ambiguities ("ghosts") of very bright ships and wind-farm side-lobes can still
+trigger false alarms. The Doppler shift uses a flat-earth geometry with the nominal heading (about 10 % accuracy). The
+ICEYE loader follows ICEYE's documented metadata keys but has only been tested on the fixture, not on a real delivery,
+so check the printed scene summary. ICEYE data isn't free; ESA's third-party missions programme gives researchers
+access on proposal.
+
 ## Cross-pass contact linking
 A dark contact in one scene may be the same vessel seen in an earlier pass. `linking.py` proposes **tentative** links
 (never an identity) from checkable physics: implied speed (distance / time gap), length agreement, and a time-gap decay
@@ -93,5 +148,5 @@ colouring and the per-scenario breakdown) alongside the map, queue and tracks.
 
 ## Limitations
 - Real-data thresholds are untuned; expect sun glint and whitecaps to drive false alarms (`--kseed`). Tested on a fabricated mini-scene.
-- No SAR azimuth-shift handling; the Sentinel-2 path has no Sentinel-1 loader yet.
+- SAR path (Sentinel-1 / ICEYE) handles the Doppler azimuth shift but not azimuth ambiguities; see the SAR section.
 - S2 band-offset speed estimate and calibrated confidence are not implemented.

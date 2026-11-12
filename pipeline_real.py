@@ -92,11 +92,12 @@ def load_masks(safe, H, W, mask_cirrus):
 
 
 # ---------------------------------------------------------------------- CFAR
-def cfar(img, valid):
-    """CFAR z-score and local background mean; masked (invalid) pixels are ignored in the statistics."""
+def cfar(img, valid, bg_valid=None):
+    """CFAR z-score and local background mean; masked (invalid) pixels are ignored in the statistics.
+    bg_valid (default: valid) can additionally leave known targets out of the background estimate."""
     box = lambda a, k: ndi.uniform_filter(a, k, mode="reflect")
     nb, ng = P.BG ** 2, P.GUARD ** 2
-    w = valid.astype(np.float32)
+    w = (valid if bg_valid is None else bg_valid).astype(np.float32)
     aw = img * w
     n = box(w, P.BG) * nb - box(w, P.GUARD) * ng
     s1 = box(aw, P.BG) * nb - box(aw, P.GUARD) * ng
@@ -122,7 +123,7 @@ def blobs(img, z, mu, excl):
         pk = np.argmax(w)
         dets.append(dict(x=float(((cc + 0.5) * w).sum() / w.sum() * PX), y=float(((rr + 0.5) * w).sum() / w.sum() * PX),
                          L_est=float(math.sqrt(12 * lam + 1) * PX), area_px=int(len(rr)), peak_z=float(z[rr[pk], cc[pk]]),
-                         peak_excess_pct=float(w[pk]), row=int(rr[pk]), col=int(cc[pk]),
+                         peak_excess_pct=float(w[pk]), excess_sum=float(w.sum()), row=int(rr[pk]), col=int(cc[pk]),
                          snr_db=float(10 * math.log10(max(img[rr[pk], cc[pk]], 1e-3) / max(mu[rr[pk], cc[pk]], 1e-3)))))
     return dets
 
@@ -212,7 +213,9 @@ def fetch_osm_structures(lonlat_bounds, cache="structures_osm.csv"):
       node["man_made"="lighthouse"]({bbox}); way["man_made"="offshore_platform"]({bbox});
     );out center;"""
     print("Fetching structures from OpenStreetMap...")
-    data = json.load(urllib.request.urlopen("https://overpass-api.de/api/interpreter?data=" + urllib.parse.quote(q), timeout=180))
+    req = urllib.request.Request("https://overpass-api.de/api/interpreter?data=" + urllib.parse.quote(q),
+                                 headers={"User-Agent": "BlueShadow/0.1 (research prototype)"})   # default urllib UA gets HTTP 406
+    data = json.load(urllib.request.urlopen(req, timeout=180))
     rows = []
     for e in data["elements"]:
         lat, lon = (e["lat"], e["lon"]) if "lat" in e else (e["center"]["lat"], e["center"]["lon"])
