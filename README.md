@@ -45,8 +45,8 @@ What the real-data path does:
 - AIS cleaning (9-digit MMSI, duplicates, >60 kn jump outliers, SOG/COG sentinels), projection through the tile's UTM grid,
   interpolation to the granule sensing time from `MTD_TL.xml`.
 - Static-structure catalogue from AIS AtoN + optional csv + OpenStreetMap (`--osm`: turbines, platforms, buoys, lights;
-  cached in `structures_osm.csv` for one area at a time: delete it when you change area. If Overpass is down it retries,
-  tries a mirror, then carries on without it).
+  cached per area in `structures_osm_<bbox>.csv`. If Overpass is down it retries, tries a mirror, then carries on
+  without it).
 - Detection-limit curve from synthetic boats pasted into *real* clear-water patches of the scene (sub-pixel coverage model,
   hull contrast taken from matched 20-100 m vessels). Reported as measured-but-simulated.
 - Extra outputs: `contacts.geojson` (detections + interpolated AIS), NIR and RGB crops, nearest AIS tracks per contact.
@@ -69,7 +69,7 @@ supported, and they're meant to be used together ("tip and cue"):
 ```
 # Sentinel-1: pick a night pass and pull the bbox window (VV/VH + ESA WorldCover land mask) from Planetary Computer
 python fetch_scene.py --sensor s1 --bbox 12.55 55.55 12.85 55.75 --date 2025-11-20 --days 6 --night
-OUT=./out_s1 python pipeline_sar.py --scene s1_extracted/<id>.S1 --ais ais_window.csv --osm
+OUT=./out_s1 python pipeline_sar.py --scene s1_extracted/<pass id>__<bbox>.S1 --ais ais_window.csv --osm
 OUT=./out_s1 python build_ui.py
 
 # ICEYE: point it at the GRD GeoTIFF (its .json/.xml metadata sidecar next to it); build a land mask once
@@ -93,15 +93,24 @@ What changes for radar (`sar.py` loads the scene, `pipeline_sar.py` runs it):
   Length is measured on the blob pixels within 13 dB of the ship's peak, minus the resolution blur. Unmatched
   detections on a brighter ship's azimuth or range line, at least 10 dB fainter, are labelled `SIDELOBE_ARTIFACT`
   (status `artifact`: kept for audit, never queued). AIS-matched detections are never flagged. On the real Øresund night
-  pass this cut the length error against AIS from 79 m to 27 m, and 22 of 193 detections were flagged as streaks.
+  pass this cut the length error against AIS from 79 m to 27 m, and 22 of 193 detections were flagged as streaks. Over
+  17 AIS ships in two real night scenes (Øresund + Kattegat) the error is 34 m on average with almost no bias (−2 m).
+  13–16 dB performs about the same; from 19 dB the streaks come back. Expect ±35 m at Sentinel-1 resolution: ships with
+  one very bright spot come out short, the rest a little long.
 - **Automatic threshold.** The seed threshold comes from the speckle measured on open water (gamma ENL fitted to the
   99.9th percentile) and a false-alarm target (`--fa-rate`, per 100 km²: 1 for Sentinel-1, 0.1 for ICEYE). Use `--kseed`
   to set it by hand.
 - **Land mask.** Comes from ESA WorldCover; there's no cloud mask, because radar sees through cloud. The small-boat limit
   is about one resolution cell: 20 m for Sentinel-1, ~4 m for ICEYE. The size bands get finer when the sensor can
   resolve small boats.
-- **Detection limit.** The curve comes from synthetic ship echoes pasted into real clear-water patches of the scene. The
-  echo strength is calibrated from matched AIS vessels.
+- **Low-contrast clutter.** In a rough sea, wind cells and streaks (~1 km texture, coarser than speckle) pass the CFAR
+  threshold. An unexplained detection less than 10 dB above the local sea is reported as `LOW_CONTRAST_CLUTTER` (low
+  priority, still queued) instead of `DARK_CANDIDATE`. On the two real night scenes every AIS-confirmed ship was ≥ 12 dB,
+  while the Kattegat wind-texture hits clustered at ~7 dB.
+- **Detection limit.** The curve comes from synthetic ship echoes pasted into real clear-water patches of the scene.
+  The echo strength is calibrated from matched AIS vessels and scaled with L³, not L², because small wooden or GRP boats
+  return far less per m² than steel hulls. With L², a real Kattegat scene claimed ~100 % detection of 6 m boats.
+  Read the small-boat end of the curve as an optimistic extrapolation.
 
 Test without real data (the fixtures paint moving ships at their Doppler-shifted positions):
 ```

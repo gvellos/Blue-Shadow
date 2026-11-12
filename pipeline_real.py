@@ -204,11 +204,13 @@ def load_structures(path, left, top, crs):
 OVERPASS_SERVERS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]
 
 
-def fetch_osm_structures(lonlat_bounds, cache="structures_osm.csv"):
-    """Offshore wind turbines, platforms, buoys, beacons and lights from OpenStreetMap (Overpass API), cached to csv."""
+def fetch_osm_structures(lonlat_bounds, cache=None):
+    """Offshore wind turbines, platforms, buoys, beacons and lights from OpenStreetMap (Overpass API), cached to csv.
+    The default cache file is named after the area, so scenes of different areas don't share one."""
+    lon0, lat0, lon1, lat1 = lonlat_bounds
+    cache = cache or f"structures_osm_{lon0:.2f}_{lat0:.2f}_{lon1:.2f}_{lat1:.2f}.csv"
     if os.path.exists(cache):
         return cache
-    lon0, lat0, lon1, lat1 = lonlat_bounds
     bbox = f"{lat0},{lon0},{lat1},{lon1}"
     q = f"""[out:json][timeout:120];(
       node["generator:source"="wind"]({bbox}); node["power"="generator"]["generator:method"="wind_turbine"]({bbox});

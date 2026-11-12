@@ -36,7 +36,9 @@ import sar as S               # noqa: E402
 GUARD_M, BG_M = 410.0, 910.0                   # CFAR windows in metres (pipeline.py's 41 / 91 px at 10 m)
 COAST_BUFFER_M = 200.0
 INJECT_LENGTHS = [3, 4, 6, 8, 10, 12, 15, 20, 25, 30, 40, 60, 100, 150]
-DEFAULT_ECHO_K = 3.0       # ship echo = k * sea backscatter * L^2 (m^2); the simulator's 0.03 L^2 at 10 m pixels
+DEFAULT_ECHO_K = 0.03      # ship echo = k * sea backscatter * L^3 (m^3); equals the simulator's 0.03 L^2 at 10 m px for L = 100 m.
+# L^3 rather than L^2: small boats (wood / GRP, low freeboard) return far less per m^2 than steel hulls, so scaling the
+# echo of matched 90-230 m ships down with L^2 claimed ~100 % detection of 6 m boats on a real Kattegat scene.
 # Target speckle false alarms per 100 km^2 for the automatic threshold. ICEYE is lower because its few-look speckle,
 # once warped to UTM, has a heavier extreme tail than the fitted gamma predicts (~10x more spikes on the fixture);
 # Sentinel-1 keeps 1 because a stricter threshold starts losing weak real echoes. Both measured with eval.py --sar.
@@ -48,6 +50,11 @@ CORE_DB = 13.0
 # SIDELOBE_CELLS resolution cells, and is at least SIDELOBE_DB fainter.
 SIDELOBE_CELLS, SIDELOBE_DB = 40, 10.0
 RESOLUTION_M = 20.0        # set per scene by configure()
+# Peak contrast (dB over the local sea) below which an unexplained detection is reported as LOW_CONTRAST_CLUTTER rather
+# than DARK_CANDIDATE. On two real Sentinel-1 night scenes (Oresund, Kattegat) every AIS-confirmed ship was >= 12 dB,
+# while the wind-texture false alarms of a rough sea clustered at ~7 dB (90 % below 9 dB). Still queued, low priority.
+MIN_CONTRAST_DB = 10.0
+P.PRIORITY.setdefault("LOW_CONTRAST_CLUTTER", 0.15)
 
 
 def odd(n):
@@ -303,12 +310,13 @@ def injection_curve(scene, excl, tiles, rng, echo_k, lengths, n=40):
                     continue
                 if any(math.hypot(r * px - d["y"], c * px - d["x"]) < 200 for d in dets0):
                     continue
-                energy = echo_k * sea * L * L * rng.lognormal(0, 0.4) / (px * px)
+                energy = echo_k * sea * L ** 3 * rng.lognormal(0, 0.4) / (px * px)
                 if render_ship_sar(t, r, c, L, energy, px, rng):
                     pts.append((r, c))
             dets = detect(t, ex)
             near = lambda d, q: math.hypot(d["y"] - (q[0] + 0.5) * px, d["x"] - (q[1] + 0.5) * px) < 30 + L / 2
-            hit += sum(any(near(d, q) for d in dets) for q in pts)
+            # a hit = reported as a ship: CFAR fired AND it clears the contrast floor (else it is LOW_CONTRAST_CLUTTER)
+            hit += sum(any(near(d, q) and d["snr_db"] >= MIN_CONTRAST_DB for d in dets) for q in pts)
             fa += sum(1 for d in dets if not any(near(d, q) for q in pts)
                       and not any(math.hypot(d["x"] - e["x"], d["y"] - e["y"]) < 60 for e in dets0))
             tot += len(pts)
@@ -339,7 +347,7 @@ def main():
     ap.add_argument("--osm", action="store_true", help="fetch structures from OpenStreetMap (cached in structures_osm.csv)")
     ap.add_argument("--no-az-shift", action="store_true", help="match AIS at its true position (no Doppler correction)")
     ap.add_argument("--echo-k", type=float, default=None,
-                    help="ship echo for injection: k x sea backscatter x L^2; default = median of matched vessels")
+                    help="ship echo for injection: k x sea backscatter x L^3; default = median of matched vessels")
     ap.add_argument("--no-inject", action="store_true")
     ap.add_argument("--sensitive", help="lon0,lat0,lon1,lat1 corridor that boosts priority x1.5")
     ap.add_argument("--history", help="JSON file of prior-pass contacts (see pipeline_real.py / link_contacts.py)")
@@ -427,7 +435,7 @@ def main():
                 img, valid = scene.read(Window(max(d["col"] - P.BG // 2, 0), max(d["row"] - P.BG // 2, 0), P.BG, P.BG))
                 sea = float(np.median(img[valid])) if valid.any() else 0.0
                 if sea > 0:
-                    ks.append(d["excess_sum"] * px * px / (sea * pairs[i][0]["length"] ** 2))
+                    ks.append(d["excess_sum"] * px * px / (sea * pairs[i][0]["length"] ** 3))
         if a.echo_k:
             echo_src = "override"
         elif len(ks) >= 5:
@@ -468,6 +476,11 @@ def main():
         else:
             code, text, ev = P.explain(d, ais_scene + ais_masked, matched_mmsi, [xy for xy, _ in static], dl)
             text = text.replace("Sentinel limit", f"{sensor_name} limit")
+            if code in ("DARK_CANDIDATE", "SMALL_BELOW_LIMIT") and d["snr_db"] < MIN_CONTRAST_DB:
+                code = "LOW_CONTRAST_CLUTTER"
+                text = (f"Only {d['snr_db']:.1f} dB above the local sea (AIS-confirmed ships here are >= {MIN_CONTRAST_DB:.0f} dB): "
+                        "most likely wind texture or a wave crest, possibly a small low-reflectivity boat.")
+                ev = dict(contrast_db=round(d["snr_db"], 1), min_ship_contrast_db=MIN_CONTRAST_DB)
             if code == "STATIC_STRUCTURE":
                 j = min(range(len(static)), key=lambda k: math.hypot(d["x"] - static[k][0][0], d["y"] - static[k][0][1]))
                 ev = dict(structure=static[j][1], dist_m=round(math.hypot(d["x"] - static[j][0][0], d["y"] - static[j][0][1])))

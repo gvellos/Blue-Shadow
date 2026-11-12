@@ -231,7 +231,8 @@ def assemble_s1(item, bbox, out_dir):
     """Read the bbox window of VV (+ VH) from the RTC COGs and write <out_dir>/<id>.S1 for pipeline_sar.py."""
     import json
     import sar as S
-    folder = f"{out_dir}/{item.id}.S1"
+    tag = "_".join(f"{v:.2f}".replace("-", "m") for v in bbox)          # one pass can cover several areas
+    folder = f"{out_dir}/{item.id}__{tag}.S1"
     os.makedirs(folder, exist_ok=True)
     sign = __import__("planetary_computer").sign
     geo = None

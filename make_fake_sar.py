@@ -18,7 +18,7 @@ from scipy import ndimage as ndi
 import sar as S
 
 SEA = 0.02          # sigma0 ~ -17 dB
-ECHO_K = 3.0        # ship echo = ECHO_K * SEA * L^2 (m^2), same default as pipeline_sar.py
+ECHO_K = 0.3        # ship echo = ECHO_K * SEA * L^3 (m^3): 10x pipeline_sar's default; two real S1 night scenes measured 1-2.6
 
 
 def paint(img, r, c, L, px, rng, blur_px=0.0):
@@ -33,7 +33,7 @@ def paint(img, r, c, L, px, rng, blur_px=0.0):
     cov = ((np.abs(u) <= L / 2) & (np.abs(v) <= wd / 2)).reshape(2 * n + 1, os_, 2 * n + 1, os_).mean(axis=(1, 3))
     if cov.sum() == 0:
         cov[n, n] = 1
-    e = ECHO_K * SEA * L * L * rng.lognormal(0, 0.25) / (px * px)
+    e = ECHO_K * SEA * L ** 3 * rng.lognormal(0, 0.25) / (px * px)
     patch = e * cov / cov.sum() * rng.gamma(4, 0.25, cov.shape)
     if blur_px:
         patch = ndi.gaussian_filter(patch, blur_px)

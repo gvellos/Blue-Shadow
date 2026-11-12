@@ -7,7 +7,7 @@ fake_iceye/
 s1_extracted/
 s2_extracted/
 out*/
-structures_osm.csv
+structures_osm*.csv
 ais_window.csv
 *.SAFE.zip
 aisdk-*.csv
