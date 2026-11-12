@@ -2,9 +2,9 @@
 """Blue Shadow on SAR: Sentinel-1 or ICEYE radar + DMA AIS. Works at night and through cloud.
 
 Usage:
-  OUT=./out_s1    python pipeline_sar.py --scene s1_extracted/<id>.S1 --ais ais_window.csv [--osm]
-  OUT=./out_iceye python pipeline_sar.py --scene path/to/ICEYE_..._GRD.tif --ais ais_window.csv
-then  OUT=./out_s1 python build_ui.py
+  OUT=runs/s1    python -m blueshadow sar --scene data/s1/<id>.S1 --ais data/ais/ais_window.csv [--osm]
+  OUT=runs/iceye python -m blueshadow sar --scene path/to/ICEYE_..._GRD.tif --ais data/ais/ais_window.csv
+then  OUT=runs/s1 python -m blueshadow ui
 
 Same contract as pipeline_real.py (same reason codes, JSON outputs and UI), with what changes for radar:
   * scene      : sar.open_scene() -> linear backscatter on a metric grid; any pixel size (S1 10 m, ICEYE 0.5-3 m).
@@ -28,10 +28,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUT = os.environ.setdefault("OUT", "./out_sar")
-import pipeline as P          # noqa: E402  (after OUT is set)
-import pipeline_real as R     # noqa: E402
-import sar as S               # noqa: E402
+OUT = os.environ.setdefault("OUT", "runs/sar")
+from . import pipeline as P          # noqa: E402  (after OUT is set)
+from . import pipeline_real as R     # noqa: E402
+from . import sar as S               # noqa: E402
 
 GUARD_M, BG_M = 410.0, 910.0                   # CFAR windows in metres (pipeline.py's 41 / 91 px at 10 m)
 COAST_BUFFER_M = 200.0
@@ -84,7 +84,7 @@ def build_masks(scene):
     land = scene.land_grid(cell)
     if land is None:
         print("WARNING: no land mask (landmask.tif). Coast will cause false alarms; build one with "
-              "`python fetch_scene.py --landmask-for <scene>`.")
+              "`python -m blueshadow fetch --landmask-for <scene>`.")
         land = np.zeros((math.ceil(H / f), math.ceil(W / f)), bool)
     d_land = (ndi.distance_transform_edt(~land, sampling=cell) if land.any()
               else np.full(land.shape, 1e5)).astype(np.float32)
@@ -335,7 +335,7 @@ def db_png(path, img, valid):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scene", default=None, help="Blue Shadow SAR folder (<id>.S1) or ICEYE GeoTIFF / product folder")
-    ap.add_argument("--ais", default="ais_window.csv")
+    ap.add_argument("--ais", default="data/ais/ais_window.csv")
     ap.add_argument("--kseed", type=float, default=None,
                     help="CFAR seed threshold in sigma; default = set from the measured speckle ENL and --fa-rate")
     ap.add_argument("--fa-rate", type=float, default=None,
@@ -344,7 +344,7 @@ def main():
     ap.add_argument("--klow", type=float, default=5.0, help="CFAR grow threshold in sigma")
     ap.add_argument("--maxcrops", type=int, default=200)
     ap.add_argument("--structures", help="csv with lon,lat[,name] of turbines / buoys / platforms")
-    ap.add_argument("--osm", action="store_true", help="fetch structures from OpenStreetMap (cached in structures_osm.csv)")
+    ap.add_argument("--osm", action="store_true", help="fetch structures from OpenStreetMap (cached per area in data/osm/)")
     ap.add_argument("--no-az-shift", action="store_true", help="match AIS at its true position (no Doppler correction)")
     ap.add_argument("--echo-k", type=float, default=None,
                     help="ship echo for injection: k x sea backscatter x L^3; default = median of matched vessels")
@@ -359,9 +359,9 @@ def main():
     g.add_argument("--landmask", help="GeoTIFF with 1 = land (any grid)")
     a = ap.parse_args()
 
-    path = a.scene or (sorted(glob.glob("s1_extracted/*.S1")) or [None])[0]
+    path = a.scene or (sorted(glob.glob("data/s1/*.S1")) or [None])[0]
     if not path:
-        raise SystemExit("no --scene given and nothing in s1_extracted/ (run fetch_scene.py --sensor s1 first)")
+        raise SystemExit("no --scene given and nothing in data/s1/ (run `python -m blueshadow fetch --sensor s1` first)")
     scene = S.open_scene(path, time=a.time, heading=a.heading, incidence=a.incidence, calib=a.calib, landmask=a.landmask)
     configure(scene, a.kseed or 10.0, a.klow)
     t_img, px, H, W = scene.time, scene.px, scene.height, scene.width
@@ -512,7 +512,7 @@ def main():
     # ---- cross-pass linking (same history file as the Sentinel-2 path, so S1 / S2 / ICEYE passes link together)
     links_proposed = 0
     if a.history:
-        import linking as LK
+        from . import linking as LK
         for r in recs:
             r["scene"] = scene.id
         hist = json.load(open(a.history)) if os.path.exists(a.history) else []

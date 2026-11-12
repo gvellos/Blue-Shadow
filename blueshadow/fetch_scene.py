@@ -8,20 +8,20 @@ HTTP range requests. It writes a small SAFE-like folder (GeoTIFF instead of JP2 
 way) with an MTD_TL.xml carrying the sensing time.
 
 Usage:
-  python fetch_scene.py --bbox 11.80 54.92 13.59 55.94 --date 2025-09-27
-  python fetch_scene.py --bbox 11.80 54.92 13.59 55.94 --date 2025-09-27 --days 6 --max-cloud 20 --out s2_extracted
+  python -m blueshadow fetch --bbox 11.80 54.92 13.59 55.94 --date 2025-09-27
+  python -m blueshadow fetch --bbox 11.80 54.92 13.59 55.94 --date 2025-09-27 --days 6 --max-cloud 20 --out data/s2
 then:
-  OUT=./out python pipeline_real.py --safe s2_extracted/<printed>.SAFE --ais ais_window.csv
+  OUT=runs/s2 python -m blueshadow s2 --safe data/s2/<printed>.SAFE --ais data/ais/ais_window.csv
 
 Tip: get AIS for the same scene/day with inspect_data.py (it writes ais_window.csv). bbox is lon/lat:
 minLon minLat maxLon maxLat.
 
 Sentinel-1 radar (works at night and through cloud), from the sentinel-1-rtc collection:
-  python fetch_scene.py --sensor s1 --bbox 11.80 54.92 13.59 55.94 --date 2025-11-20 --night
-writes s1_extracted/<id>.S1/ (vv.tif, vh.tif, landmask.tif from ESA WorldCover, scene.json); then
-  OUT=./out_s1 python pipeline_sar.py --scene s1_extracted/<printed>.S1 --ais ais_window.csv --osm
+  python -m blueshadow fetch --sensor s1 --bbox 11.80 54.92 13.59 55.94 --date 2025-11-20 --night
+writes data/s1/<id>.S1/ (vv.tif, vh.tif, landmask.tif from ESA WorldCover, scene.json); then
+  OUT=runs/s1 python -m blueshadow sar --scene data/s1/<printed>.S1 --ais data/ais/ais_window.csv --osm
 For an ICEYE product (bought or tasked), only the land mask is needed from here:
-  python fetch_scene.py --landmask-for path/to/ICEYE_..._GRD.tif
+  python -m blueshadow fetch --landmask-for path/to/ICEYE_..._GRD.tif
 
 Requires: pip install pystac-client planetary-computer rasterio
 """
@@ -166,7 +166,7 @@ WORLDCOVER = "esa-worldcover"             # 10 m land cover; 80 = permanent wate
 def search_s1(bbox, date, days, night):
     import planetary_computer as pc
     from pystac_client import Client
-    import sar as S
+    from . import sar as S
 
     d0 = datetime.strptime(date, "%Y-%m-%d")
     dt = f"{d0 - timedelta(days=days):%Y-%m-%d}/{d0 + timedelta(days=days):%Y-%m-%d}"
@@ -230,7 +230,7 @@ def build_landmask(bounds_ll, crs, left, top, width, height, cell, out_path):
 def assemble_s1(item, bbox, out_dir):
     """Read the bbox window of VV (+ VH) from the RTC COGs and write <out_dir>/<id>.S1 for pipeline_sar.py."""
     import json
-    import sar as S
+    from . import sar as S
     tag = "_".join(f"{v:.2f}".replace("-", "m") for v in bbox)          # one pass can cover several areas
     folder = f"{out_dir}/{item.id}__{tag}.S1"
     os.makedirs(folder, exist_ok=True)
@@ -269,7 +269,7 @@ def assemble_s1(item, bbox, out_dir):
 
 def landmask_for(path):
     """Write a WorldCover land mask next to an existing SAR scene (e.g. an ICEYE product)."""
-    import sar as S
+    from . import sar as S
     sc = S.open_scene(path)
     out = (f"{path.rstrip('/')}/landmask.tif" if os.path.isdir(path)
            else f"{os.path.splitext(path)[0]}_landmask.tif")
@@ -289,7 +289,7 @@ def main():
     ap.add_argument("--max-cloud", type=float, default=30.0, help="s2: reject scenes cloudier than this %% (default 30)")
     ap.add_argument("--min-coverage", type=float, default=40.0,
                     help="s2: reject tiles with less than this %% real data (avoids swath-edge tiles; default 40)")
-    ap.add_argument("--out", default=None, help="output directory (default s2_extracted / s1_extracted)")
+    ap.add_argument("--out", default=None, help="output directory (default data/s2 / data/s1)")
     ap.add_argument("--landmask-for", metavar="SCENE",
                     help="only build a WorldCover land mask for an existing SAR scene (e.g. an ICEYE GeoTIFF) and exit")
     a = ap.parse_args()
@@ -301,9 +301,11 @@ def main():
     if a.sensor == "s1":
         item = search_s1(a.bbox, a.date, a.days, a.night)
         print("Reading bbox window of VV/VH from the Cloud-Optimized GeoTIFFs...")
-        folder, valid = assemble_s1(item, a.bbox, a.out or "s1_extracted")
+        folder, valid = assemble_s1(item, a.bbox, a.out or "data/s1")
         print(f"\nWrote {folder}  ({valid * 100:.0f}% of the window inside the swath)")
-        print(f"Next:\n  OUT=./out_s1 python pipeline_sar.py --scene {folder} --ais ais_window.csv --osm")
+        t = item.datetime.replace(tzinfo=None)
+        print(f"Next:\n  python -m blueshadow cut-ais data/ais/aisdk-{t:%Y-%m-%d}.csv --scene {folder}\n"
+              f"  OUT=runs/<name> python -m blueshadow sar --scene {folder} --ais data/ais/ais_{t:%Y%m%d_%H%M}.csv --osm")
         return
 
     item = search_scene(a.bbox, a.date, a.days, a.max_cloud, a.min_coverage)
@@ -311,13 +313,14 @@ def main():
     assets = {b: sign(item.assets[b].href) for b in (*BANDS_10M, BAND_20M)}
     sensing = item.properties.get("datetime") or item.datetime.isoformat()
     print("Reading bbox windows from the Cloud-Optimized GeoTIFFs (range requests, not the whole tile)...")
-    safe, valid_frac = assemble(assets, a.bbox, a.out or "s2_extracted", item.id, sensing)
+    safe, valid_frac = assemble(assets, a.bbox, a.out or "data/s2", item.id, sensing)
     print(f"\nWrote {safe}  ({valid_frac*100:.0f}% of the fetched window is real data)")
     if valid_frac < 0.4:
         print("WARNING: most of the fetched window is nodata (swath edge). This tile barely covers your bbox -- "
               "expect few/no vessels and lots of edge clutter. Try a bbox nearer the tile centre, another --date, "
               "or raise --days so a better-covering pass can be chosen.")
-    print(f"Next:\n  OUT=./out python pipeline_real.py --safe {safe} --ais ais_window.csv")
+    print(f"Next:\n  python -m blueshadow cut-ais data/ais/aisdk-{item.datetime:%Y-%m-%d}.csv --scene {safe}\n"
+          f"  OUT=runs/<name> python -m blueshadow s2 --safe {safe} --ais data/ais/ais_{item.datetime:%Y%m%d_%H%M}.csv")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """Build a tiny fake Sentinel-2 L2A SAFE (GeoTIFF instead of JP2) + DMA-style AIS csv to smoke-test pipeline_real.py.
-Usage: python make_fake_scene.py && OUT=./out_fake python pipeline_real.py --safe fake/*.SAFE --ais fake/ais.csv --structures fake/structures.csv --kseed 8
+Usage: python -m blueshadow fake-s2 && OUT=runs/fake_s2 python -m blueshadow s2 --safe fixtures/s2/*.SAFE --ais fixtures/s2/ais.csv --structures fixtures/s2/structures.csv --kseed 8
 The fake AIS already carries a parsed "t" column, as ais_window.csv written by inspect_data.py does."""
 import math, os
 import numpy as np, pandas as pd, rasterio
@@ -8,7 +8,7 @@ from rasterio.warp import transform as wt
 
 rng = np.random.default_rng(3)
 N10, PX = 2400, 10.0
-safe = "fake/S2A_MSIL2A_20250927T103041_N0511_R108_T33UUB_20250927T141918.SAFE"
+safe = "fixtures/s2/S2A_MSIL2A_20250927T103041_N0511_R108_T33UUB_20250927T141918.SAFE"
 gran = f"{safe}/GRANULE/L2A_T33UUB_A000001_20250927T103041"
 for d in ("R10m", "R20m"):
     os.makedirs(f"{gran}/IMG_DATA/{d}", exist_ok=True)
@@ -110,9 +110,9 @@ msg(2190047, t_img, lon, lat + 0.3, 0, 0, 0, "Base Station", "BS")
 msg(219999999, t_img, 20.0, 60.0, 5, 0, 50, "Class A", "FAR")
 df = pd.DataFrame(rows).sample(frac=1, random_state=1)
 df["t"] = pd.to_datetime(df["# Timestamp"], format="%d/%m/%Y %H:%M:%S")
-df.to_csv("fake/ais.csv", index=False)
+df.to_csv("fixtures/s2/ais.csv", index=False)
 pd.DataFrame([dict(lon=rc_to_lonlat(r, c)[0], lat=rc_to_lonlat(r, c)[1], name=f"turbine {i}") for i, (r, c) in enumerate(turbines[1:])]
-             ).to_csv("fake/structures.csv", index=False)
+             ).to_csv("fixtures/s2/structures.csv", index=False)
 
 # ---- ground truth for eval.py: every injected vessel, its length, and the status the pipeline should assign.
 # ok -> on AIS at image time (matched); gap/mismatch/dark -> no usable AIS at image time (unidentified).
@@ -124,5 +124,5 @@ for r, c, L, mode in ships:
 # the ship painted under the cloud patch must be masked away, i.e. NOT detected
 lon, lat = rc_to_lonlat(300, 1900)
 truth.append(dict(lon=lon, lat=lat, length_m=40, mode="masked", expect_status="", expect_detect=False))
-pd.DataFrame(truth).to_csv("fake/truth.csv", index=False)
-print("fake dataset written; dark ship at", rc_to_lonlat(2100, 1000), "| truth: fake/truth.csv")
+pd.DataFrame(truth).to_csv("fixtures/s2/truth.csv", index=False)
+print("fake dataset written; dark ship at", rc_to_lonlat(2100, 1000), "| truth: fixtures/s2/truth.csv")

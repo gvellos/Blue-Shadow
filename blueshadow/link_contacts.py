@@ -4,16 +4,16 @@
 Two uses:
 
   # Link several real runs (each an OUT dir with all_detections.json + report.json), in any order:
-  python link_contacts.py out_day1 out_day2 out_day3 --out out_day3
+  python -m blueshadow link out_day1 out_day2 out_day3 --out out_day3
       -> writes tracks.json into --out and injects `links` + `track_id` back into every run's
          all_detections.json and unidentified_contacts.json. Re-run build_ui.py on any run to see the links.
 
   # Self-contained demonstration with three fabricated passes (no data needed):
-  python link_contacts.py --demo --out out_demo && OUT=out_demo python build_ui.py && open out_demo/ui.html
+  python -m blueshadow link --demo --out out_demo && OUT=out_demo python -m blueshadow ui && open out_demo/ui.html
 """
 import argparse, json, os
 from datetime import datetime, timedelta, timezone
-import linking as L
+from . import linking as L
 
 
 def load_run(d):
@@ -120,7 +120,7 @@ def make_demo(out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dirs", nargs="*", help="run output directories, each with all_detections.json")
-    ap.add_argument("--out", default="./out", help="where to write tracks.json (and demo outputs)")
+    ap.add_argument("--out", default="runs/links", help="where to write tracks.json (and demo outputs)")
     ap.add_argument("--demo", action="store_true", help="fabricate three passes and link them")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)

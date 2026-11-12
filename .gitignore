@@ -1,13 +1,9 @@
+# environment
 .venv/
 __pycache__/
-# generated fixtures, fetched scenes and run outputs
-fake/
-fake_s1/
-fake_iceye/
-s1_extracted/
-s2_extracted/
-out*/
-structures_osm*.csv
-ais_window.csv
-*.SAFE.zip
-aisdk-*.csv
+.DS_Store
+
+# downloads (scenes, AIS, OpenStreetMap caches), generated test scenes and pipeline outputs
+data/
+fixtures/
+runs/

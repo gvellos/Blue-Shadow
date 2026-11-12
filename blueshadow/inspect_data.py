@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Check a Sentinel-2 L2A zip + DMA AIS csv before writing real loaders.
-Usage: python inspect_data.py <S2A_...SAFE.zip | path/to/XXX.SAFE> aisdk-2025-09-27.csv
+Usage: python -m blueshadow inspect <S2A_...SAFE.zip | path/to/XXX.SAFE> aisdk-2025-09-27.csv
 Needs: pip install rasterio pandas numpy"""
 import glob, os, re, sys, zipfile
 import numpy as np, pandas as pd, rasterio
 from rasterio.warp import transform_bounds
 
+if len(sys.argv) != 3 or sys.argv[1] in ("-h", "--help"):
+    sys.exit(__doc__)
 s2_in, ais_csv = sys.argv[1], sys.argv[2]
 if os.path.isdir(s2_in) and s2_in.rstrip("/").endswith(".SAFE"):
     # already-extracted or fetched SAFE directory (e.g. from fetch_scene.py)
     safe = s2_in.rstrip("/")
 else:
-    dest = "s2_extracted"
+    dest = "data/s2"
     if not os.path.isdir(dest):
         print("Extracting (about 1 GB, one minute)...")
         zipfile.ZipFile(s2_in).extractall(dest)
@@ -65,5 +67,6 @@ if len(a):
     print(f"Vessels with a known length: {(L > 0).sum()} / {len(L)}")
     print("Length bands (m):", pd.cut(L[L > 0], [0, 15, 20, 50, 100, 1000]).value_counts().sort_index().to_dict())
     print("Type of mobile:", a.drop_duplicates("MMSI")["Type of mobile"].value_counts().to_dict())
-    a.to_csv("ais_window.csv", index=False)
-    print("Saved ais_window.csv (filtered AIS)")
+    os.makedirs("data/ais", exist_ok=True)
+    a.to_csv("data/ais/ais_window.csv", index=False)
+    print("Saved data/ais/ais_window.csv (filtered AIS)")

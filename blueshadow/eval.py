@@ -4,7 +4,7 @@
 Two things are scored against known ground truth, so tuning (CFAR, AIS matching, link scoring) can be
 measured and regressions caught:
 
-  detection  -- run pipeline_real.py on the synthetic scene (make_fake_scene.py writes fake/truth.csv with
+  detection  -- run pipeline_real.py on the synthetic scene (make_fake_scene.py writes fixtures/s2/truth.csv with
                 every injected vessel, its length and the status it *should* get) and compute recall,
                 precision, false-alarm count, length error (MAE) and status-classification accuracy.
   linking    -- run the cross-pass demo (link_contacts.py --demo writes link_truth.json mapping each
@@ -12,18 +12,18 @@ measured and regressions caught:
                 groupings (pairwise precision / recall / F1).
 
 Usage:
-  python eval.py --build              # build the fixture, run the pipeline, then score everything
-  python eval.py --run-dir out_fake   # score an existing pipeline run against fake/truth.csv
-  python eval.py --detect-only | --link-only
-  python eval.py --build --json metrics.json   # also dump machine-readable metrics
-  python eval.py --build --sar s1 | --sar iceye   # score the radar path (pipeline_sar.py) on a fake SAR scene
+  python -m blueshadow eval --build              # build the fixture, run the pipeline, then score everything
+  python -m blueshadow eval --run-dir out_fake   # score an existing pipeline run against fixtures/s2/truth.csv
+  python -m blueshadow eval --detect-only | --link-only
+  python -m blueshadow eval --build --json metrics.json   # also dump machine-readable metrics
+  python -m blueshadow eval --build --sar s1 | --sar iceye   # score the radar path (pipeline_sar.py) on a fake SAR scene
 
 Exit code is non-zero if any metric falls below the thresholds in THRESHOLDS (a CI / pre-commit gate).
 """
 import argparse, json, os, subprocess, sys, tempfile
 from itertools import combinations
 
-import linking as L
+from . import linking as L
 
 PY = sys.executable
 MATCH_RADIUS_M = 120.0        # a detection within this distance of a truth point is the same vessel
@@ -131,31 +131,31 @@ def score_linking(out_dir):
 
 
 # ---------------------------------------------------------------- drivers
-SAR_FIXTURES = {"s1": "fake_s1/S1A_IW_GRDH_FAKE.S1", "iceye": "fake_iceye/ICEYE_X7_GRD_SM_FAKE.tif"}
+SAR_FIXTURES = {"s1": "fixtures/s1/S1A_IW_GRDH_FAKE.S1", "iceye": "fixtures/iceye/ICEYE_X7_GRD_SM_FAKE.tif"}
 
 
 def build_fixture_run(out, sar=None):
     env = dict(os.environ, OUT=out)
     if sar:
         print(f"Building synthetic {sar} SAR scene (make_fake_sar.py)...", flush=True)
-        subprocess.run([PY, "make_fake_sar.py", "--sensor", sar], check=True)
+        subprocess.run([PY, "-m", "blueshadow.make_fake_sar", "--sensor", sar], check=True)
         print("Running pipeline_sar.py on the scene...", flush=True)
-        subprocess.run([PY, "pipeline_sar.py", "--scene", SAR_FIXTURES[sar], "--ais", f"fake_{sar}/ais.csv",
-                        "--structures", f"fake_{sar}/structures.csv"], check=True, env=env)
+        subprocess.run([PY, "-m", "blueshadow.pipeline_sar", "--scene", SAR_FIXTURES[sar], "--ais", f"fixtures/{sar}/ais.csv",
+                        "--structures", f"fixtures/{sar}/structures.csv"], check=True, env=env)
         return out
     print("Building synthetic scene (make_fake_scene.py)...", flush=True)
-    subprocess.run([PY, "make_fake_scene.py"], check=True)
-    safe = subprocess.run("ls -d fake/*.SAFE", shell=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run([PY, "-m", "blueshadow.make_fake_scene"], check=True)
+    safe = subprocess.run("ls -d fixtures/s2/*.SAFE", shell=True, capture_output=True, text=True).stdout.strip()
     print("Running pipeline_real.py on the scene...", flush=True)
-    subprocess.run([PY, "pipeline_real.py", "--safe", safe, "--ais", "fake/ais.csv",
-                    "--structures", "fake/structures.csv", "--kseed", "8"], check=True, env=env)
+    subprocess.run([PY, "-m", "blueshadow.pipeline_real", "--safe", safe, "--ais", "fixtures/s2/ais.csv",
+                    "--structures", "fixtures/s2/structures.csv", "--kseed", "8"], check=True, env=env)
     return out
 
 
 def build_link_demo(workdir):
     out = os.path.join(workdir, "out_linkdemo")
     print("Running cross-pass linking demo (link_contacts.py --demo)...", flush=True)
-    subprocess.run([PY, "link_contacts.py", "--demo", "--out", out], check=True)
+    subprocess.run([PY, "-m", "blueshadow.link_contacts", "--demo", "--out", out], check=True)
     return out
 
 
@@ -167,16 +167,16 @@ def render_ui(run_dir, metrics, failures):
                              thresholds=THRESHOLDS, passed=not failures, failures=failures)
     json.dump(rep, open(rep_path, "w"), indent=2)
     print("Building UI (build_ui.py)...", flush=True)
-    subprocess.run([PY, "build_ui.py"], check=True, env=dict(os.environ, OUT=run_dir))
+    subprocess.run([PY, "-m", "blueshadow.build_ui"], check=True, env=dict(os.environ, OUT=run_dir))
     return f"{run_dir}/ui.html"
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--build", action="store_true", help="build the fixture + run the pipeline before scoring")
-    ap.add_argument("--run-dir", help="score detection against an existing pipeline run dir (uses fake/truth.csv)")
+    ap.add_argument("--run-dir", help="score detection against an existing pipeline run dir (uses fixtures/s2/truth.csv)")
     ap.add_argument("--sar", choices=sorted(SAR_FIXTURES), help="score the SAR path on a fake s1 or iceye scene instead")
-    ap.add_argument("--truth", default=None, help="ground truth csv (default fake/truth.csv, or fake_<sar>/truth.csv)")
+    ap.add_argument("--truth", default=None, help="ground truth csv (default fixtures/s2/truth.csv, or fixtures/<sar>/truth.csv)")
     ap.add_argument("--detect-only", action="store_true")
     ap.add_argument("--link-only", action="store_true")
     ap.add_argument("--json", help="also write all metrics to this file")
@@ -193,7 +193,7 @@ def main():
 
     if do_detect:
         run_dir = a.run_dir or build_fixture_run(a.ui or os.path.join(workdir, "out_fake"), a.sar)
-        metrics["detection"] = m = score_detection(run_dir, a.truth or (f"fake_{a.sar}/truth.csv" if a.sar else "fake/truth.csv"))
+        metrics["detection"] = m = score_detection(run_dir, a.truth or (f"fixtures/{a.sar}/truth.csv" if a.sar else "fixtures/s2/truth.csv"))
         print("\n=== DETECTION ===")
         print(f"  truth vessels      {m['truth_vessels']}   detections {m['detections']}")
         print(f"  recall             {m['recall']:.3f}  ({m['tp']} found, {m['fn']} missed)")

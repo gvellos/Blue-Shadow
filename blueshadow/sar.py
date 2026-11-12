@@ -8,7 +8,7 @@ radar geometry or lon/lat), so pipeline_sar.py can use the same frame as the res
 local metres, x east / y south from the grid's top-left corner.
 
 Supported inputs
-  * Blue Shadow SAR folder  <id>.S1/  written by `fetch_scene.py --sensor s1` (or make_fake_sar.py):
+  * Blue Shadow SAR folder  <id>.S1/  written by `python -m blueshadow fetch --sensor s1` (or make_fake_sar.py):
         vv.tif [vh.tif]   linear backscatter (Planetary Computer sentinel-1-rtc, gamma0, UTM, 10 m)
         landmask.tif      1 = land (ESA WorldCover), any grid; optional
         scene.json        sensor, id, time_utc, orbit_state, heading_deg, incidence_deg, resolution_m, ...

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build a self-contained analyst UI (ui.html) from the pipeline outputs.
-Usage: OUT=./out python build_ui.py   (run pipeline.py or pipeline_real.py first)"""
+Usage: OUT=runs/s2 python -m blueshadow ui   (run a pipeline first: demo, s2 or sar)"""
 import base64, json, os
 
-OUT = os.environ.get("OUT", "./out")
+OUT = os.environ.get("OUT", "runs/demo")
 load = lambda n: json.load(open(f"{OUT}/{n}"))
 contacts, allDet, report = load("unidentified_contacts.json"), load("all_detections.json"), load("report.json")
 b64 = lambda p: "data:image/png;base64," + base64.b64encode(open(p, "rb").read()).decode() if os.path.isfile(p) else ""
@@ -141,12 +141,12 @@ function rep(){if(D.report.real)return repReal();const r=D.report,rows=r.size_ba
  $("rep").innerHTML=`<p class="mu">${r.note} AIS is a biased reference: it only contains cooperative vessels.</p>
  <table><tr><th>Size band</th><th>AIS in scene</th><th>Detected</th><th>Recall</th><th>Expected detectable</th><th>Sim truth</th><th>Sim detected</th></tr>${rows}</table>
  ${curveSvg(r.detection_limit_curve,"Detection probability vs length (injection test)")}`}
-function tracks(){const ts=D.report.tracks||[];if(!ts.length){$("trk").innerHTML="<p class=mu>No cross-pass tracks. Run link_contacts.py across two or more passes (or pass --history to pipeline_real.py).</p>";return}
+function tracks(){const ts=D.report.tracks||[];if(!ts.length){$("trk").innerHTML="<p class=mu>No cross-pass tracks. Run <code>python -m blueshadow link</code> across two or more runs (or pass --history to the pipeline).</p>";return}
  $("trk").innerHTML=`<p class="mu">${ts.length} track(s) spanning multiple passes. A track chains the same contact across revisits via tentative links; probabilities are capped and never assign identity.</p>`+
  ts.map(t=>`<div style="margin:10px 0;padding:8px;border:1px solid var(--bd);border-radius:8px"><b>${t.track_id}</b> <span class="mu">${t.n_observations} obs · ${(t.first_seen||"").slice(0,10)} → ${(t.last_seen||"").slice(0,10)} · max p ${t.max_link_p??"–"}</span> ${t.resolved_mmsi?`<span class="chip" style="background:#2ca02c">resolved → MMSI ${t.resolved_mmsi}</span>`:`<span class="chip" style="background:#d62728">unresolved</span>`}
  <table><tr><th>Contact</th><th>Time</th><th>Status</th><th>Reason</th><th>Length</th><th>Link p</th></tr>${t.observations.map(o=>`<tr><td>${o.id.slice(-9)}</td><td class="mu">${(o.time_utc||"").replace("T"," ").slice(0,16)}</td><td>${o.status}</td><td>${(o.reason_code||"").replace(/_/g," ").toLowerCase()}</td><td>${o.est_length_m??"–"} m</td><td>${o.link_p??"–"}</td></tr>`).join("")}</table></div>`).join("")}
 const TABS={t1:"v1",t2:"v2",t3:"v3",t4:"v4"};
-function evalView(){const e=D.report.evaluation;if(!e){$("ev").innerHTML="<p class=mu>No evaluation metrics. Run <code>python eval.py --ui out_eval</code> to score this scene against ground truth.</p>";return}
+function evalView(){const e=D.report.evaluation;if(!e){$("ev").innerHTML="<p class=mu>No evaluation metrics. Run <code>python -m blueshadow eval --ui runs/eval</code> to score this scene against ground truth.</p>";return}
  const d=e.detection,l=e.linking,th=e.thresholds||{};
  const g=(v,t)=>v>=t?"#2ca02c":"#d62728",pct=v=>(v*100).toFixed(1)+"%";
  const metric=(lab,val,disp,thr)=>`<div style="flex:1;min-width:120px;padding:10px;border:1px solid var(--bd);border-radius:8px"><div class="mu" style="font-size:12px">${lab}</div><div style="font-size:22px;color:${thr==null?"var(--tx)":g(val,thr)}">${disp}</div>${thr!=null?`<div class="mu" style="font-size:11px">min ${pct(thr)}</div>`:""}</div>`;

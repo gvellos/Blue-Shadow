@@ -1,8 +1,8 @@
 """Build small fake SAR scenes (+ DMA-style AIS, structures, ground truth) to smoke-test pipeline_sar.py offline.
 
-  python make_fake_sar.py --sensor s1      # fake_s1/   : night Sentinel-1 pass, 10 m UTM grid, descending
-  python make_fake_sar.py --sensor iceye   # fake_iceye/: ICEYE-style GRD, 2.5 m, amplitude DN, GCP georeferencing
-  OUT=./out_fake_s1 python pipeline_sar.py --scene fake_s1/S1A_IW_GRDH_FAKE.S1 --ais fake_s1/ais.csv --structures fake_s1/structures.csv
+  python -m blueshadow fake-sar --sensor s1      # fixtures/s1/   : night Sentinel-1 pass, 10 m UTM grid, descending
+  python -m blueshadow fake-sar --sensor iceye   # fixtures/iceye/: ICEYE-style GRD, 2.5 m, amplitude DN, GCP georeferencing
+  OUT=runs/fake_s1 python -m blueshadow sar --scene fixtures/s1/S1A_IW_GRDH_FAKE.S1 --ais fixtures/s1/ais.csv --structures fixtures/s1/structures.csv
 
 Moving ships are painted where SAR would SHOW them (true position + Doppler azimuth shift from sar.py), while their
 AIS reports the true position, so the fixture tests the shift correction: run with --no-az-shift to see fast crossing
@@ -15,7 +15,7 @@ from rasterio.transform import from_origin
 from rasterio.warp import transform as wt
 from scipy import ndimage as ndi
 
-import sar as S
+from . import sar as S
 
 SEA = 0.02          # sigma0 ~ -17 dB
 ECHO_K = 0.3        # ship echo = ECHO_K * SEA * L^3 (m^3): 10x pipeline_sar's default; two real S1 night scenes measured 1-2.6
@@ -91,7 +91,7 @@ SHIPS = [  # (true row, true col, length m, mode, sog kn, cog deg) on a 1500 x 1
 ]
 
 
-def build_s1(out="fake_s1"):
+def build_s1(out="fixtures/s1"):
     rng = np.random.default_rng(5)
     N, PX = 1500, 10.0
     safe = f"{out}/S1A_IW_GRDH_FAKE.S1"
@@ -132,7 +132,7 @@ def build_s1(out="fake_s1"):
     return safe, ships
 
 
-def build_iceye(out="fake_iceye"):
+def build_iceye(out="fixtures/iceye"):
     rng = np.random.default_rng(9)
     N, PX = 2000, 2.5                                                      # 5 km x 5 km stripmap-like crop
     os.makedirs(out, exist_ok=True)

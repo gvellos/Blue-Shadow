@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Blue Shadow on REAL data: Sentinel-2 L2A (B08 NIR, 10 m) + DMA AIS (ais_window.csv from inspect_data.py).
 
-Usage:  OUT=./out python pipeline_real.py [--safe s2_extracted/XXX.SAFE] [--ais ais_window.csv] [--kseed 12]
+Usage:  OUT=runs/s2 python -m blueshadow s2 [--safe data/s2/XXX.SAFE] [--ais data/ais/ais_window.csv] [--kseed 12]
                                          [--structures structures.csv] [--osm] [--mask-cirrus]
                                          [--inject-pct 15] [--sensitive lon0,lat0,lon1,lat1]
 
@@ -26,8 +26,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUT = os.environ.setdefault("OUT", "./out")
-import pipeline as P  # noqa: E402  (after OUT is set)
+OUT = os.environ.setdefault("OUT", "runs/s2")
+from . import pipeline as P  # noqa: E402  (after OUT is set)
 
 PX = 10.0
 UNKNOWN_LEN = 30.0            # placeholder length for matching only; excluded from size-band reference
@@ -208,7 +208,7 @@ def fetch_osm_structures(lonlat_bounds, cache=None):
     """Offshore wind turbines, platforms, buoys, beacons and lights from OpenStreetMap (Overpass API), cached to csv.
     The default cache file is named after the area, so scenes of different areas don't share one."""
     lon0, lat0, lon1, lat1 = lonlat_bounds
-    cache = cache or f"structures_osm_{lon0:.2f}_{lat0:.2f}_{lon1:.2f}_{lat1:.2f}.csv"
+    cache = cache or f"data/osm/structures_osm_{lon0:.2f}_{lat0:.2f}_{lon1:.2f}_{lat1:.2f}.csv"
     if os.path.exists(cache):
         return cache
     bbox = f"{lat0},{lon0},{lat1},{lon1}"
@@ -237,6 +237,7 @@ def fetch_osm_structures(lonlat_bounds, cache=None):
         lat, lon = (e["lat"], e["lon"]) if "lat" in e else (e["center"]["lat"], e["center"]["lon"])
         t = e.get("tags", {})
         rows.append(dict(lon=lon, lat=lat, name=t.get("name") or t.get("seamark:type") or t.get("generator:source") or t.get("man_made") or "osm"))
+    os.makedirs(os.path.dirname(cache) or ".", exist_ok=True)
     pd.DataFrame(rows, columns=["lon", "lat", "name"]).to_csv(cache, index=False)
     print(f"  {len(rows)} structures -> {cache}")
     return cache
@@ -315,11 +316,11 @@ def injection_curve_real(src, excl, tiles, rng, contrast_pct, lengths=INJECT_LEN
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--safe", default=None)
-    ap.add_argument("--ais", default="ais_window.csv")
+    ap.add_argument("--ais", default="data/ais/ais_window.csv")
     ap.add_argument("--kseed", type=float, default=12.0, help="CFAR seed threshold in sigma (raise if too many false alarms)")
     ap.add_argument("--maxcrops", type=int, default=200)
     ap.add_argument("--structures", help="csv with lon,lat[,name] of turbines / buoys / platforms")
-    ap.add_argument("--osm", action="store_true", help="fetch structures from OpenStreetMap (cached in structures_osm.csv)")
+    ap.add_argument("--osm", action="store_true", help="fetch structures from OpenStreetMap (cached per area in data/osm/)")
     ap.add_argument("--mask-cirrus", action="store_true", help="also exclude SCL thin-cirrus pixels (default: keep, flag, discount)")
     ap.add_argument("--inject-pct", type=float, default=None,
                     help="NIR reflectance (%%) excess of an injected hull over water; default = median of matched 20-100 m vessels")
@@ -328,7 +329,7 @@ def main():
     ap.add_argument("--history", help="JSON file of prior-pass contacts; cross-pass links are proposed against it "
                                       "and this pass is appended (see link_contacts.py for multi-run linking)")
     a = ap.parse_args()
-    safe = (a.safe or glob.glob("s2_extracted/*.SAFE")[0]).rstrip("/")
+    safe = (a.safe or glob.glob("data/s2/*.SAFE")[0]).rstrip("/")
     t_img = sensing_time(safe)
     P.K_SEED, P.NOCOV_X = a.kseed, 1e18      # DMA receivers cover the whole Danish EEZ: no "no coverage" strip
     os.makedirs(f"{OUT}/crops", exist_ok=True)
@@ -434,7 +435,7 @@ def main():
     # ---- cross-pass linking: propose tentative links to prior-pass contacts, accumulate a history file
     links_proposed = 0
     if a.history:
-        import linking as LK
+        from . import linking as LK
         for r in recs:
             r["scene"] = os.path.basename(safe)
         hist = json.load(open(a.history)) if os.path.exists(a.history) else []

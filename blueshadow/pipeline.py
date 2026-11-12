@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUT = os.environ.get("OUT", "./out")
+OUT = os.environ.get("OUT", "runs/demo")
 os.makedirs(f"{OUT}/crops", exist_ok=True)
 
 PX = 10.0                      # metres per pixel (S1 IW GRD)
